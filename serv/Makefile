@@ -1,4 +1,4 @@
-all: ninja build
+all: build ninja
 
 build:
 	./build.sh

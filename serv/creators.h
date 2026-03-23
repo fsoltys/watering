@@ -1,16 +1,14 @@
 #pragma once
 
 #include "proto.h"
-#include "dispatcher.h"
+#include "serv.h"
 
-#define SLOT_ID_TO_ADDR(x)          (0x020000 + 0x080000*x)
+#define SLOT_BINARY_SIZE            (SLOT1_ORIGIN - SLOT0_ORIGIN)
+
+#define SLOT_ID_TO_ADDR(x)          (SLOT0_ORIGIN + (SLOT_BINARY_SIZE)*x)
 #define PART_TO_OFFSET(x)           (MAX_FLASH_DATA*(x))
 
-#define SLOT_BINARY_SIZE            512*1024
-
-extern uint8_t slot_binary[2][SLOT_BINARY_SIZE];
 extern uint8_t buf[BUF_LEN];
-
 extern packet_t *out_buf;
 
 int read_binary_from_file(const char *fname, uint8_t slot_id);

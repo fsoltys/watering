@@ -1,216 +1,73 @@
 #include <stdio.h>
+#include <argp.h>
+#include <getopt.h>
 #include <stdlib.h>
-#include <string.h>
-#include <unistd.h>
-#include <sys/types.h>
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
-#include <netdb.h>
-#include <poll.h>
+#include <pthread.h>
 
-#include "proto.h"
-#include "dispatcher.h"
+#include "recver.h"
+#include "serv.h"
+#include "logger.h"
 #include "controller.h"
 
-#define dbg_printf printf
+struct argp_option options[] = {
+    { "verbose", 'v', "LEVEL", 0, "Set verbosity level (0=errors only, 1=warnings, 2=info, 3=debug, 4=trace)" },
+    { "help", 'h', 0, 0, "Display this help message" },
+    {0}
+};
 
-#define PORT "8080"
 
-// Get sockaddr, IPv4 or IPv6:
-void *get_in_addr(struct sockaddr *sa)
-{
-  if (sa->sa_family == AF_INET) {
-    return &(((struct sockaddr_in*)sa)->sin_addr);
-  }
+const char *argp_program_version = "watering server v0.0.0";
+const char *argp_program_bug_addr = "koruddl@gmail.com";
+static char args_doc[] = "[OPTIONS]...";
+char doc[] = "Server for embedded watering service";
 
-  return &(((struct sockaddr_in6*)sa)->sin6_addr);
-}
+error_t parse_opt(int key, char *arg, struct argp_state *state) {
+  struct arguments *arguments = (struct arguments *)state->input;
+  int val;
 
-// Return a listening socket
-int get_listener_socket(void)
-{
-  int listener;     // Listening socket descriptor
-  int yes=1;        // For setsockopt() SO_REUSEADDR, below
-  int rv;
-
-  struct addrinfo hints, *ai, *p;
-
-  // Get us a socket and bind it
-  memset(&hints, 0, sizeof hints);
-  hints.ai_family = AF_UNSPEC;
-  hints.ai_socktype = SOCK_STREAM;
-  hints.ai_flags = AI_PASSIVE;
-  if ((rv = getaddrinfo(NULL, PORT, &hints, &ai)) != 0) {
-    fprintf(stderr, "selectserver: %s\n", gai_strerror(rv));
-    exit(1);
-  }
-
-  for(p = ai; p != NULL; p = p->ai_next) {
-    listener = socket(p->ai_family, p->ai_socktype, p->ai_protocol);
-    if (listener < 0) {
-      continue;
-    }
-
-    // Lose the pesky "address already in use" error message
-    setsockopt(listener, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(int));
-
-    if (bind(listener, p->ai_addr, p->ai_addrlen) < 0) {
-      close(listener);
-      continue;
-    }
-
-    break;
-  }
-
-  freeaddrinfo(ai); // All done with this
-
-  // If we got here, it means we didn't get bound
-  if (p == NULL) {
-    return -1;
-  }
-
-  // Listen
-  if (listen(listener, 10) == -1) {
-    return -1;
-  }
-
-  return listener;
-}
-
-// Add a new file descriptor to the set
-void add_to_pfds(struct pollfd *pfds[], int newfd, int *fd_count, int *fd_size)
-{
-  // If we don't have room, add more space in the pfds array
-  if (*fd_count == *fd_size) {
-    *fd_size *= 2; // Double it
-
-    *pfds = realloc(*pfds, sizeof(**pfds) * (*fd_size));
-  }
-
-  (*pfds)[*fd_count].fd = newfd;
-  (*pfds)[*fd_count].events = POLLIN; // Check ready-to-read
-
-  (*fd_count)++;
-}
-
-// Remove an index from the set
-void del_from_pfds(struct pollfd pfds[], int i, int *fd_count)
-{
-  // Copy the one from the end over this one
-  pfds[i] = pfds[*fd_count-1];
-
-  (*fd_count)--;
-}
-
-// Main
-int main(void)
-{
-  int listener;     // Listening socket descriptor
-
-  int newfd;        // Newly accept()ed socket descriptor
-  struct sockaddr_storage remoteaddr; // Client address
-  socklen_t addrlen;
-
-  char buf[BUF_LEN];    // Buffer for client data
-
-  char remoteIP[INET6_ADDRSTRLEN];
-
-  // Start off with room for 5 connections
-  // (We'll realloc as necessary)
-  int fd_count = 0;
-  int fd_size = 5;
-  struct pollfd *pfds = malloc(sizeof *pfds * fd_size);
-
-  // Set up and get a listening socket
-  listener = get_listener_socket();
-
-  if (listener == -1) {
-    fprintf(stderr, "error getting listening socket\n");
-    exit(1);
-  }
-
-  // Add the listener to set
-  pfds[0].fd = listener;
-  pfds[0].events = POLLIN; // Report ready to read on incoming connection
-
-  fd_count = 1; // For the listener
-
-  init_controller();
-
-  // Main loop
-  for(;;) {
-    int poll_count = poll(pfds, fd_count, -1);
-
-    if (poll_count == -1) {
-      perror("poll");
-      exit(1);
-    }
-
-    // Run through the existing connections looking for data to read
-    for(int i = 0; i < fd_count; i++) {
-
-      // Check if someone's ready to read
-      if (pfds[i].revents & POLLIN) { // We got one!!
-
-        if (pfds[i].fd == listener) {
-          // If listener is ready to read, handle new connection
-
-          addrlen = sizeof remoteaddr;
-          newfd = accept(listener,
-              (struct sockaddr *)&remoteaddr,
-              &addrlen);
-
-          if (newfd == -1) {
-            perror("accept");
-          } else {
-            add_to_pfds(&pfds, newfd, &fd_count, &fd_size);
-            add_to_ctxs(newfd);
-
-            printf("pollserver: new connection from %s on "
-                "socket %d\n",
-                inet_ntop(remoteaddr.ss_family,
-                  get_in_addr((struct sockaddr*)&remoteaddr),
-                  remoteIP, INET6_ADDRSTRLEN),
-                newfd);
-          }
-        } else {
-          // If not the listener, we're just a regular client
-          int nbytes = recv(pfds[i].fd, buf, sizeof buf, 0);
-
-          int sender_fd = pfds[i].fd;
-
-          if (nbytes <= 0) {
-            // Got error or connection closed by client
-            if (nbytes == 0) {
-              // Connection closed
-              printf("pollserver: socket %d hung up\n", sender_fd);
-            } else {
-              perror("recv");
-            }
-
-            close(sender_fd); // Bye!
-
-            del_from_ctxs(sender_fd);
-            del_from_pfds(pfds, i, &fd_count);
-          } else {
-            for (int i=0; i<nbytes; i++) {
-              dbg_printf("%2X ", (uint8_t)buf[i]);
-              if (i % 4 == 0) {
-                dbg_printf(":");
-              } else if (i % 32 == 0) {
-                dbg_printf("\n");
-              }
-            }
-
-            fflush(stdout);
-
-            dispatch((packet_t *)buf, sender_fd, nbytes);
-          }
-        }
+  switch (key) {
+    case 'v':
+      val = atoi(arg);
+      if (set_log_lvl(val) != 0) {
+        fprintf(stderr, "Error: Verbosity level must be between 0 and 4\n");
+        return ARGP_ERR_UNKNOWN;
       }
-    }
+      break;
+
+    case 'h':
+      argp_state_help(state, stdout, ARGP_HELP_STD_HELP);
+      break;
+
+    default:
+      return ARGP_ERR_UNKNOWN;
   }
+
+  return 0;
+}
+
+struct argp argp = { options, parse_opt, args_doc, doc };
+
+  int
+main(int argc, char **argv)
+{
+  argp_parse(&argp, argc, argv, 0, 0, NULL);
+
+  log_info("Welcome in watering server\n");
+  log_info("Version:\t%u.%u.%u\n",
+      PROJECT_VERSION_MAJOR, PROJECT_VERSION_MINOR, PROJECT_VERSION_PATCH);
+  log_info("Commit:\t\t%s\t%s\n", GIT_COMMIT_HASH, GIT_DIRTY);
+
+  pthread_t recv_thread;
+  pthread_t serv_thread;
+  pthread_t control_thread;
+
+  pthread_create(&serv_thread, NULL, &serv_main, NULL);
+  pthread_create(&recv_thread, NULL, &recv_main, NULL);
+  pthread_create(&control_thread, NULL, &main_controller, NULL);
+
+  pthread_join(recv_thread, NULL);
+  pthread_join(serv_thread, NULL);
+  pthread_join(control_thread, NULL);
 
   return 0;
 }
