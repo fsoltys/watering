@@ -3,16 +3,20 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from core.redis import redis_manager
+from core.database import db_manager
+from core.logger import setup_logging
 from api.routers import telemetry, devices
 
-logging.basicConfig(level=logging.INFO)
+setup_logging()
 logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await redis_manager.connect()
+    await db_manager.connect()
     yield
     await redis_manager.disconnect()
+    await db_manager.disconnect()
 
 app = FastAPI(
     title="Plant Watering API",
