@@ -10,28 +10,23 @@ class AccessLogToDebugFilter(logging.Filter):
         return True
 
 def setup_logging():
-    # Pobieramy poziom logowania ze zmiennych środowiskowych, domyślnie INFO
     log_level = getattr(logging, settings.LOG_LEVEL.upper(), logging.INFO)
     
-    # Format: [timestamp] [poziom] [moduł aplikacji] [treść logu]
     log_format = "[%(asctime)s] [%(levelname)s] [%(name)s] %(message)s"
     date_format = "%Y-%m-%d %H:%M:%S"
     
-    # Ustawienie głównego konfiguratora logów dla całej aplikacji
     logging.basicConfig(
         level=log_level,
         format=log_format,
         datefmt=date_format,
-        force=True # Wymusza nadpisanie dotychczasowych (domyślnych) konfiguratorów
+        force=True 
     )
     
-    # Przechwytujemy logi serwera Uvicorn (FastAPI) by ujednolicić ich wygląd
     for logger_name in ("uvicorn", "uvicorn.access", "uvicorn.error"):
         logger = logging.getLogger(logger_name)
         logger.handlers.clear()
         logger.propagate = True
         
-        # Obniżamy poziom spamu uvicorn.access do DEBUG
         if logger_name == "uvicorn.access":
             logger.addFilter(AccessLogToDebugFilter())
     

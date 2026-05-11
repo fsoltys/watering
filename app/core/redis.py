@@ -11,16 +11,17 @@ class RedisManager:
         self.client = None
 
     async def connect(self):
-        # Pełna weryfikacja certyfikatu za pomocą pliku CA
+        kwargs = {"decode_responses": True}
+        if settings.REDIS_URL.startswith("rediss://"):
+            kwargs["ssl_cert_reqs"] = "required"
+            kwargs["ssl_ca_certs"] = "/app/certs/ca.crt"
+            
         self.pool = ConnectionPool.from_url(
             settings.REDIS_URL,
-            decode_responses=True,
-            ssl_cert_reqs="required",
-            ssl_ca_certs="/app/certs/ca.crt"
+            **kwargs
         )
         self.client = Redis(connection_pool=self.pool)
         
-        # Weryfikacja połączenia
         await self.client.ping()
         logger.info("Połączono z Redis (TLS + hasło) pomyślnie.")
 

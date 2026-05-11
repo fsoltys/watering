@@ -8,3 +8,18 @@ pico-client/.gdb_history
 # Secrets & TLS certs
 app/certs/
 .env
+**/.env
+
+# Python
+**/__pycache__/
+**/*.py[cod]
+**/*.pyo
+*.egg-info/
+.venv/
+venv/
+
+# Node / Frontend
+front/node_modules/
+front/dist/
+front/.vite/
+front/.next/

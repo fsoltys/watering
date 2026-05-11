@@ -12,6 +12,7 @@ CREATE TABLE devices (
     user_id INT REFERENCES users(id) ON DELETE CASCADE,
     name VARCHAR(100) NOT NULL,
     water_duration_sec INT DEFAULT 10,
+    moisture_threshold_percent INT DEFAULT 30,
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
