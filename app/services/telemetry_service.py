@@ -6,13 +6,13 @@ from schemas.telemetry import TelemetryCreate
 logger = logging.getLogger(__name__)
 
 _RANGE_TO_VIEW: dict[str, str] = {
-    "24h":  "telemetry_15m",
+    "1d":  "telemetry_15m",
     "7d":  "telemetry_1h",
     "30d": "telemetry_1d",
 }
 
 _RANGE_MAP: dict[str, timedelta] = {
-    "24h":  timedelta(days=1),
+    "1d":  timedelta(days=1),
     "7d":  timedelta(days=7),
     "30d": timedelta(days=30),
 }
