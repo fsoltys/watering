@@ -60,8 +60,10 @@ async def read_users_me(
     current_user_id: int = Depends(get_current_user_id),
     user_service: UserService = Depends(get_user_service)
 ):
+    logger.info(f"Pobieranie danych zalogowanego użytkownika: id {current_user_id}")
     user = await user_service.get_user_by_id(current_user_id)
     if not user:
         logger.warning(f"Nie znaleziono użytkownika o id {current_user_id} (/me)")
         raise HTTPException(status_code=404, detail="Użytkownik nie istnieje")
+    logger.info(f"Zwrócono dane użytkownika o id {current_user_id}")
     return user

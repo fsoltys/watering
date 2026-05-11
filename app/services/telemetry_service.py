@@ -48,17 +48,21 @@ class TelemetryService:
 
     async def get_devices_for_user(self, user_id: int) -> list[dict]:
         """Returns devices owned by user, enriched with the latest telemetry reading."""
+        logger.info(f"Pobieranie urządzeń dla usera {user_id}")
         query = """
             SELECT
                 d.device_id,
                 d.name,
                 d.water_duration_sec,
                 d.created_at,
+                d.group_id,
+                g.name AS group_name,
                 t.moisture_lvl,
                 t.battery_lvl,
                 t.water_lvl,
                 t.time AS last_seen
             FROM devices d
+            LEFT JOIN device_groups g ON g.id = d.group_id AND g.user_id = d.user_id
             LEFT JOIN LATERAL (
                 SELECT moisture_lvl, battery_lvl, water_lvl, time
                 FROM telemetry
@@ -70,10 +74,13 @@ class TelemetryService:
             ORDER BY d.created_at DESC
         """
         rows = await self.db.fetch(query, user_id)
-        return [dict(r) for r in rows]
+        devices = [dict(r) for r in rows]
+        logger.info(f"Zwrócono {len(devices)} urządzeń dla usera {user_id}")
+        return devices
 
     async def get_telemetry_history(self, device_id: str, user_id: int, range_key: str) -> list[dict]:
         """Returns time-series telemetry for one device, scoped to the authenticated user."""
+        logger.info(f"Pobieranie historii telemetrii: urządzenie '{device_id}', zakres={range_key} (user {user_id})")
         delta = RANGE_MAP.get(range_key, timedelta(hours=24))
         since = datetime.now(timezone.utc) - delta
 
@@ -82,6 +89,7 @@ class TelemetryService:
             device_id, user_id
         )
         if not ownership:
+            logger.warning(f"Odmowa dostępu do historii telemetrii urządzenia '{device_id}' dla usera {user_id}")
             raise PermissionError("Brak dostępu do urządzenia")
 
         query = """
@@ -91,5 +99,7 @@ class TelemetryService:
             ORDER BY time ASC
         """
         rows = await self.db.fetch(query, device_id, since)
-        return [dict(r) for r in rows]
+        points = [dict(r) for r in rows]
+        logger.info(f"Zwrócono {len(points)} rekordów telemetrii dla urządzenia '{device_id}'")
+        return points
 

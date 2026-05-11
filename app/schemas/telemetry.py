@@ -23,6 +23,8 @@ class DeviceResponse(BaseModel):
     name: str
     water_duration_sec: int
     created_at: datetime
+    group_id: Optional[int] = None
+    group_name: Optional[str] = None
     moisture_lvl: Optional[int] = None
     battery_lvl: Optional[int] = None
     water_lvl: Optional[int] = None

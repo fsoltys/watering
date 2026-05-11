@@ -1,54 +1,139 @@
-import { Droplet, Battery, Signal, Plus, FolderPlus, ChevronRight, Settings as SettingsIcon, X, Waves, Play, Loader2 } from 'lucide-react';
+import { Droplet, Battery, Signal, Plus, FolderPlus, ChevronRight, Settings as SettingsIcon, Waves, Play, Loader2, Trash2 } from 'lucide-react';
 import { useNavigate } from 'react-router';
 import { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/ui/dialog';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '../components/ui/alert-dialog';
 
 interface Device {
   device_id: string;
   name: string;
   water_duration_sec: number;
   created_at: string;
+  group_id: number | null;
+  group_name: string | null;
   moisture_lvl: number | null;
   battery_lvl: number | null;
   water_lvl: number | null;
   last_seen: string | null;
 }
 
+interface DeviceAssignment {
+  device_id: string;
+  device_name: string;
+}
+
 interface DeviceGroup {
-  id: string;
+  id: number;
   name: string;
-  moistureThreshold: number;
-  wateringDuration: number;
+  moisture_threshold_percent: number;
+  watering_duration_sec: number;
+  created_at: string;
+  devices: DeviceAssignment[];
 }
 
 export default function DeviceList() {
-  const [showGroupModal, setShowGroupModal] = useState(false);
-  const [showGroupSettings, setShowGroupSettings] = useState<string | null>(null);
   const [groups, setGroups] = useState<DeviceGroup[]>([]);
-  const [newGroupName, setNewGroupName] = useState('');
   const [devices, setDevices] = useState<Device[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
+  const [savingGroup, setSavingGroup] = useState(false);
+  const [groupDialogOpen, setGroupDialogOpen] = useState(false);
+  const [activeGroup, setActiveGroup] = useState<DeviceGroup | null>(null);
+  const [groupName, setGroupName] = useState('');
+  const [groupMoistureThreshold, setGroupMoistureThreshold] = useState(30);
+  const [groupWateringDuration, setGroupWateringDuration] = useState(10);
+  const [groupSelectedDeviceIds, setGroupSelectedDeviceIds] = useState<Set<string>>(new Set());
+  const [waterConfirmDeviceId, setWaterConfirmDeviceId] = useState<string | null>(null);
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
 
   const { token } = useAuth();
   const navigate = useNavigate();
 
   useEffect(() => {
-    const fetchDevices = async () => {
+    const fetchData = async () => {
       try {
-        const res = await fetch('/api/v1/devices', {
-          headers: { Authorization: `Bearer ${token}` },
-        });
-        if (!res.ok) throw new Error('Błąd pobierania urządzeń');
-        setDevices(await res.json());
+        setLoading(true);
+        const headers = { Authorization: `Bearer ${token}` };
+        const [devicesRes, groupsRes] = await Promise.all([
+          fetch('/api/v1/devices', { headers }),
+          fetch('/api/v1/groups', { headers }),
+        ]);
+        if (!devicesRes.ok) throw new Error('Błąd pobierania urządzeń');
+        if (!groupsRes.ok) throw new Error('Błąd pobierania grup');
+        setDevices(await devicesRes.json());
+        setGroups(await groupsRes.json());
       } catch (e: any) {
         setError(e.message);
       } finally {
         setLoading(false);
       }
     };
-    fetchDevices();
+    fetchData();
   }, [token]);
+
+  const apiRequest = async <T,>(url: string, options: RequestInit = {}): Promise<T | null> => {
+    const headers = {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+      ...(options.headers ?? {}),
+    } as HeadersInit;
+    const res = await fetch(url, { ...options, headers });
+    if (!res.ok) {
+      const payload = await res.json().catch(() => null);
+      throw new Error(payload?.detail ?? 'Błąd żądania');
+    }
+    if (res.status === 204) return null;
+    return res.json();
+  };
+
+  const reloadData = async () => {
+    setError('');
+    setNotice('');
+    const [devicesData, groupsData] = await Promise.all([
+      apiRequest<Device[]>('/api/v1/devices'),
+      apiRequest<DeviceGroup[]>('/api/v1/groups'),
+    ]);
+    setDevices(devicesData ?? []);
+    setGroups(groupsData ?? []);
+  };
+
+  const resetGroupForm = (group: DeviceGroup | null) => {
+    setActiveGroup(group);
+    setGroupName(group?.name ?? '');
+    setGroupMoistureThreshold(group?.moisture_threshold_percent ?? 30);
+    setGroupWateringDuration(group?.watering_duration_sec ?? 10);
+    setGroupSelectedDeviceIds(new Set(group?.devices.map(d => d.device_id) ?? []));
+  };
+
+  const openCreateGroupDialog = () => {
+    resetGroupForm(null);
+    setGroupDialogOpen(true);
+  };
+
+  const openEditGroupDialog = (group: DeviceGroup) => {
+    resetGroupForm(group);
+    setGroupDialogOpen(true);
+  };
+
+  const closeGroupDialog = () => {
+    setGroupDialogOpen(false);
+    setActiveGroup(null);
+    setGroupName('');
+    setGroupMoistureThreshold(30);
+    setGroupWateringDuration(10);
+    setGroupSelectedDeviceIds(new Set());
+  };
 
   const getStatusColor = (last_seen: string | null) => {
     if (!last_seen) return 'bg-slate-100 text-slate-500';
@@ -80,87 +165,109 @@ export default function DeviceList() {
 
   const handleForceWatering = async (e: React.MouseEvent, deviceId: string) => {
     e.stopPropagation();
-    if (!confirm(`Czy na pewno chcesz wymusić podlewanie dla urządzenia ${deviceId}?`)) return;
+    setWaterConfirmDeviceId(deviceId);
+  };
+
+  const confirmForceWatering = async () => {
+    if (!waterConfirmDeviceId) return;
+    const deviceId = waterConfirmDeviceId;
+    setWaterConfirmDeviceId(null);
     try {
-      const res = await fetch(`/api/v1/devices/${deviceId}/water`, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      if (!res.ok) throw new Error('Błąd wysyłania komendy');
-      alert('Komenda podlewania wysłana!');
+      await apiRequest(`/api/v1/devices/${deviceId}/water`, { method: 'POST' });
+      setError('');
+      setNotice('Komenda podlewania wysłana!');
     } catch (e: any) {
-      alert(`Błąd: ${e.message}`);
+      setNotice('');
+      setError(e.message);
     }
   };
 
-  const handleCreateGroup = () => {
-    if (newGroupName.trim()) {
-      const newGroup: DeviceGroup = {
-        id: `GROUP-${Date.now()}`,
-        name: newGroupName,
-        moistureThreshold: 30,
-        wateringDuration: 10
-      };
-      setGroups([...groups, newGroup]);
-      setNewGroupName('');
-      setShowGroupModal(false);
-      setShowGroupSettings(newGroup.id);
+  const handleSaveGroup = async () => {
+    if (!groupName.trim()) {
+      setError('Nazwa grupy nie może być pusta.');
+      return;
+    }
+
+    setSavingGroup(true);
+    setError('');
+
+    try {
+      if (activeGroup) {
+        // Update group settings
+        await apiRequest<DeviceGroup>(`/api/v1/groups/${activeGroup.id}`, {
+          method: 'PUT',
+          body: JSON.stringify({
+            name: groupName,
+            moisture_threshold_percent: groupMoistureThreshold,
+            watering_duration_sec: groupWateringDuration,
+          }),
+        });
+
+        // Handle device assignments
+        const previousDeviceIds = new Set(activeGroup.devices.map(d => d.device_id));
+        
+        // Remove devices that are no longer selected
+        for (const deviceId of previousDeviceIds) {
+          if (!groupSelectedDeviceIds.has(deviceId)) {
+            await apiRequest(`/api/v1/groups/${activeGroup.id}/devices/${deviceId}`, { method: 'DELETE' });
+          }
+        }
+        
+        // Add devices that are newly selected
+        for (const deviceId of groupSelectedDeviceIds) {
+          if (!previousDeviceIds.has(deviceId)) {
+            await apiRequest(`/api/v1/groups/${activeGroup.id}/devices/${deviceId}`, { method: 'POST' });
+          }
+        }
+
+        closeGroupDialog();
+        await reloadData();
+      } else {
+        // Create new group
+        const createdGroup = await apiRequest<DeviceGroup>('/api/v1/groups', {
+          method: 'POST',
+          body: JSON.stringify({
+            name: groupName,
+            moisture_threshold_percent: groupMoistureThreshold,
+            watering_duration_sec: groupWateringDuration,
+          }),
+        });
+        
+        // Assign devices to the new group
+        if (createdGroup) {
+          for (const deviceId of groupSelectedDeviceIds) {
+            await apiRequest(`/api/v1/groups/${createdGroup.id}/devices/${deviceId}`, { method: 'POST' });
+          }
+        }
+
+        closeGroupDialog();
+        await reloadData();
+      }
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setSavingGroup(false);
     }
   };
 
-  const handleSaveGroupSettings = (groupId: string, moistureThreshold: number, wateringDuration: number) => {
-    setGroups(groups.map(g =>
-      g.id === groupId
-        ? { ...g, moistureThreshold, wateringDuration }
-        : g
-    ));
-    setShowGroupSettings(null);
+  const handleDeleteGroup = async () => {
+    if (!activeGroup) return;
+
+    setSavingGroup(true);
+    setError('');
+    try {
+      await apiRequest(`/api/v1/groups/${activeGroup.id}`, { method: 'DELETE' });
+      closeGroupDialog();
+      await reloadData();
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setSavingGroup(false);
+    }
   };
 
-  const GroupSettingsModal = ({ group }: { group: DeviceGroup }) => {
-    const [moisture, setMoisture] = useState(group.moistureThreshold);
-    const [duration, setDuration] = useState(group.wateringDuration);
-
-    return (
-      <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-        <div className="bg-white rounded-2xl shadow-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
-          <div className="p-6">
-            <div className="flex items-center justify-between mb-6">
-              <h2 className="text-2xl text-slate-800">Ustawienia grupy: {group.name}</h2>
-              <button onClick={() => setShowGroupSettings(null)} className="text-slate-400 hover:text-slate-600">
-                <X className="w-6 h-6" />
-              </button>
-            </div>
-            <div className="space-y-6">
-              <div>
-                <div className="flex justify-between items-center mb-2">
-                  <label className="text-slate-700">Próg wilgotności gleby</label>
-                  <span className="text-2xl text-blue-600">{moisture}%</span>
-                </div>
-                <input type="range" min="0" max="100" value={moisture}
-                  onChange={(e) => setMoisture(Number(e.target.value))}
-                  className="w-full h-2 bg-slate-200 rounded-lg appearance-none cursor-pointer" />
-              </div>
-              <div>
-                <div className="flex justify-between items-center mb-2">
-                  <label className="text-slate-700">Czas podlewania</label>
-                  <span className="text-2xl text-blue-600">{duration}s</span>
-                </div>
-                <input type="range" min="1" max="60" value={duration}
-                  onChange={(e) => setDuration(Number(e.target.value))}
-                  className="w-full h-2 bg-slate-200 rounded-lg appearance-none cursor-pointer" />
-              </div>
-              <button
-                onClick={() => handleSaveGroupSettings(group.id, moisture, duration)}
-                className="w-full flex items-center justify-center gap-3 px-6 py-4 bg-gradient-to-r from-emerald-500 to-teal-600 text-white rounded-xl hover:shadow-lg transition-shadow"
-              >
-                Zapisz ustawienia
-              </button>
-            </div>
-          </div>
-        </div>
-      </div>
-    );
+  const openDeleteConfirm = () => {
+    setDeleteConfirmOpen(true);
   };
 
   const onlineCount = devices.filter(d => getStatusLabel(d.last_seen) === 'Online').length;
@@ -169,7 +276,6 @@ export default function DeviceList() {
   return (
     <div className="p-8">
       <div className="max-w-6xl mx-auto">
-        {/* Header */}
         <div className="mb-8 flex items-center justify-between">
           <div>
             <h1 className="text-4xl mb-2 text-slate-800">Urządzenia</h1>
@@ -177,7 +283,7 @@ export default function DeviceList() {
           </div>
           <div className="flex gap-3">
             <button
-              onClick={() => setShowGroupModal(true)}
+              onClick={openCreateGroupDialog}
               className="flex items-center gap-2 px-6 py-3 bg-white border border-slate-300 text-slate-700 rounded-xl hover:shadow-lg transition-shadow"
             >
               <FolderPlus className="w-5 h-5" />
@@ -185,14 +291,14 @@ export default function DeviceList() {
             </button>
             <button
               onClick={() => navigate('/devices/new')}
-              className="flex items-center gap-2 px-6 py-3 bg-gradient-to-r from-emerald-500 to-teal-600 text-white rounded-xl hover:shadow-lg transition-shadow">
+              className="flex items-center gap-2 px-6 py-3 bg-gradient-to-r from-emerald-500 to-teal-600 text-white rounded-xl hover:shadow-lg transition-shadow"
+            >
               <Plus className="w-5 h-5" />
               Dodaj urządzenie
             </button>
           </div>
         </div>
 
-        {/* Stats Overview */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
           <div className="bg-white rounded-xl shadow-lg p-6">
             <div className="text-sm text-slate-600 mb-1">Wszystkie urządzenia</div>
@@ -208,40 +314,66 @@ export default function DeviceList() {
           </div>
         </div>
 
-        {/* Groups */}
         {groups.length > 0 && (
           <div className="mb-8">
             <h2 className="text-2xl text-slate-800 mb-4">Grupy urządzeń</h2>
-            <div className="space-y-3">
+            <div className="space-y-4">
               {groups.map((group) => (
                 <div key={group.id} className="bg-white rounded-xl shadow-lg p-6">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-4">
-                      <div className="w-12 h-12 bg-gradient-to-br from-purple-500 to-purple-600 rounded-xl flex items-center justify-center">
+                  <div className="flex items-center justify-between gap-4 mb-4">
+                    <div className="flex items-center gap-4 min-w-0">
+                      <div className="w-12 h-12 bg-gradient-to-br from-purple-500 to-purple-600 rounded-xl flex items-center justify-center shrink-0">
                         <FolderPlus className="w-6 h-6 text-white" />
                       </div>
-                      <div>
-                        <h3 className="text-lg text-slate-800">{group.name}</h3>
+                      <div className="min-w-0">
+                        <h3 className="text-lg text-slate-800 truncate">{group.name}</h3>
                         <p className="text-sm text-slate-500">
-                          Próg: {group.moistureThreshold}% • Czas: {group.wateringDuration}s
+                          Próg: {group.moisture_threshold_percent}% • Czas: {group.watering_duration_sec}s
+                        </p>
+                        <p className="text-sm text-slate-500 mt-1 font-medium">
+                          Urządzenia w grupie: {group.devices.length}
                         </p>
                       </div>
                     </div>
-                    <button
-                      onClick={() => setShowGroupSettings(group.id)}
-                      className="flex items-center gap-2 px-4 py-2 text-slate-600 hover:bg-slate-100 rounded-lg transition-colors"
-                    >
-                      <SettingsIcon className="w-5 h-5" />
-                      Ustawienia
-                    </button>
+                    <div className="flex items-center gap-2 shrink-0">
+                      <button
+                        onClick={() => openEditGroupDialog(group)}
+                        className="flex items-center gap-2 px-4 py-2 text-slate-600 hover:bg-slate-100 rounded-lg transition-colors"
+                      >
+                        <SettingsIcon className="w-5 h-5" />
+                        Ustawienia
+                      </button>
+                    </div>
                   </div>
+                  
+                  {group.devices.length > 0 && (
+                    <div className="mt-4 pt-4 border-t border-slate-200">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                        {group.devices.map((device) => {
+                          const fullDevice = devices.find(d => d.device_id === device.device_id);
+                          return (
+                            <div key={device.device_id} className="bg-slate-50 rounded-lg p-3 border border-slate-200">
+                              <h4 className="font-medium text-slate-800 text-sm truncate">{device.device_name}</h4>
+                              <p className="text-xs text-slate-500 truncate">{device.device_id}</p>
+                              {fullDevice && (
+                                <div className="mt-2 flex items-center gap-2 text-xs">
+                                  <span className={`px-2 py-1 rounded ${getStatusColor(fullDevice.last_seen)}`}>
+                                    {getStatusLabel(fullDevice.last_seen)}
+                                  </span>
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
                 </div>
               ))}
             </div>
           </div>
         )}
 
-        {/* Device List */}
         <h2 className="text-2xl text-slate-800 mb-4">Wszystkie urządzenia</h2>
 
         {loading && (
@@ -257,30 +389,41 @@ export default function DeviceList() {
           </div>
         )}
 
+        {notice && (
+          <div className="bg-emerald-50 border border-emerald-200 text-emerald-700 px-4 py-3 rounded-lg mb-4">
+            {notice}
+          </div>
+        )}
+
         {!loading && !error && devices.length === 0 && (
           <div className="text-center py-16 text-slate-400">
             Brak zarejestrowanych urządzeń.
           </div>
         )}
 
-        <div className="space-y-4">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           {devices.map((device) => (
             <div
               key={device.device_id}
               onClick={() => navigate(`/devices/${device.device_id}`)}
               className="block bg-white rounded-xl shadow-lg p-6 hover:shadow-xl transition-shadow cursor-pointer"
             >
-              <div className="flex items-center justify-between mb-4">
-                <div className="flex items-center gap-4">
-                  <div className="w-12 h-12 bg-gradient-to-br from-emerald-500 to-teal-600 rounded-xl flex items-center justify-center">
+              <div className="flex items-center justify-between mb-4 gap-4">
+                <div className="flex items-center gap-4 min-w-0">
+                  <div className="w-12 h-12 bg-gradient-to-br from-emerald-500 to-teal-600 rounded-xl flex items-center justify-center shrink-0">
                     <Signal className="w-6 h-6 text-white" />
                   </div>
-                  <div>
-                    <h3 className="text-lg text-slate-800">{device.name}</h3>
-                    <p className="text-sm text-slate-500">{device.device_id}</p>
+                  <div className="min-w-0">
+                    <h3 className="text-lg text-slate-800 truncate">{device.name}</h3>
+                    <p className="text-sm text-slate-500 truncate">{device.device_id}</p>
+                    {device.group_name && (
+                      <span className="mt-2 inline-flex px-2.5 py-1 rounded-full text-xs bg-emerald-100 text-emerald-700">
+                        {device.group_name}
+                      </span>
+                    )}
                   </div>
                 </div>
-                <div className="flex items-center gap-3">
+                <div className="flex items-center gap-3 shrink-0">
                   <span className={`px-3 py-1 rounded-full text-sm ${getStatusColor(device.last_seen)}`}>
                     {getStatusLabel(device.last_seen)}
                   </span>
@@ -337,42 +480,148 @@ export default function DeviceList() {
         </div>
       </div>
 
-      {/* Create Group Modal */}
-      {showGroupModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6">
-            <div className="flex items-center justify-between mb-6">
-              <h2 className="text-2xl text-slate-800">Nowa grupa urządzeń</h2>
-              <button onClick={() => setShowGroupModal(false)} className="text-slate-400 hover:text-slate-600">
-                <X className="w-6 h-6" />
-              </button>
-            </div>
-            <div className="mb-6">
+      <Dialog open={groupDialogOpen} onOpenChange={(open) => (open ? setGroupDialogOpen(true) : closeGroupDialog())}>
+        <DialogContent className="sm:max-w-2xl bg-white/95 backdrop-blur-xl border-slate-200/70 shadow-2xl">
+          <DialogHeader>
+            <DialogTitle className="text-2xl text-slate-800">
+              {activeGroup ? `Ustawienia grupy: ${activeGroup.name}` : 'Nowa grupa urządzeń'}
+            </DialogTitle>
+          </DialogHeader>
+
+          <div className="space-y-6 pt-2">
+            <div>
               <label className="block text-slate-700 mb-2">Nazwa grupy</label>
               <input
                 type="text"
-                value={newGroupName}
-                onChange={(e) => setNewGroupName(e.target.value)}
+                value={groupName}
+                onChange={(e) => setGroupName(e.target.value)}
                 className="w-full px-4 py-3 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500"
                 placeholder="Wprowadź nazwę grupy"
-                onKeyPress={(e) => e.key === 'Enter' && handleCreateGroup()}
+                onKeyDown={(e) => e.key === 'Enter' && handleSaveGroup()}
               />
             </div>
-            <button
-              onClick={handleCreateGroup}
-              disabled={!newGroupName.trim()}
-              className="w-full flex items-center justify-center gap-3 px-6 py-4 bg-gradient-to-r from-emerald-500 to-teal-600 text-white rounded-xl hover:shadow-lg transition-shadow disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              Utwórz grupę
-            </button>
-          </div>
-        </div>
-      )}
 
-      {/* Group Settings Modal */}
-      {showGroupSettings && (
-        <GroupSettingsModal group={groups.find(g => g.id === showGroupSettings)!} />
-      )}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <div>
+                <div className="flex justify-between items-center mb-2">
+                  <label className="text-slate-700">Próg wilgotności gleby</label>
+                  <span className="text-2xl text-blue-600">{groupMoistureThreshold}%</span>
+                </div>
+                <input
+                  type="range"
+                  min="0"
+                  max="100"
+                  value={groupMoistureThreshold}
+                  onChange={(e) => setGroupMoistureThreshold(Number(e.target.value))}
+                  className="w-full h-2 bg-slate-200 rounded-lg appearance-none cursor-pointer"
+                />
+              </div>
+              <div>
+                <div className="flex justify-between items-center mb-2">
+                  <label className="text-slate-700">Czas podlewania</label>
+                  <span className="text-2xl text-blue-600">{groupWateringDuration}s</span>
+                </div>
+                <input
+                  type="range"
+                  min="1"
+                  max="60"
+                  value={groupWateringDuration}
+                  onChange={(e) => setGroupWateringDuration(Number(e.target.value))}
+                  className="w-full h-2 bg-slate-200 rounded-lg appearance-none cursor-pointer"
+                />
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-slate-700 mb-3">Przypisane urządzenia</label>
+              <div className="space-y-2 max-h-48 overflow-y-auto border border-slate-200 rounded-lg p-3 bg-slate-50">
+                {devices.length === 0 ? (
+                  <p className="text-sm text-slate-500">Brak dostępnych urządzeń</p>
+                ) : (
+                  devices.map((device) => (
+                    <label key={device.device_id} className="flex items-center gap-3 p-2 hover:bg-slate-100 rounded cursor-pointer transition-colors">
+                      <input
+                        type="checkbox"
+                        checked={groupSelectedDeviceIds.has(device.device_id)}
+                        onChange={(e) => {
+                          const newIds = new Set(groupSelectedDeviceIds);
+                          if (e.target.checked) {
+                            newIds.add(device.device_id);
+                          } else {
+                            newIds.delete(device.device_id);
+                          }
+                          setGroupSelectedDeviceIds(newIds);
+                        }}
+                        className="w-4 h-4 text-emerald-600 border-slate-300 rounded focus:ring-emerald-500"
+                      />
+                      <div className="min-w-0 flex-1">
+                        <div className="text-sm font-medium text-slate-800 truncate">{device.name}</div>
+                        <div className="text-xs text-slate-500 truncate">{device.device_id}</div>
+                      </div>
+                    </label>
+                  ))
+                )}
+              </div>
+              <p className="mt-2 text-sm text-slate-500">
+                Zaznacz urządzenia, które mają należeć do tej grupy.
+              </p>
+            </div>
+
+            <div className="flex flex-col-reverse md:flex-row md:items-center md:justify-between gap-3 pt-2">
+              <div className="flex gap-3">
+                {activeGroup && (
+                  <button
+                    type="button"
+                    onClick={openDeleteConfirm}
+                    disabled={savingGroup}
+                    className="flex items-center gap-2 px-4 py-3 rounded-xl border border-red-200 text-red-600 hover:bg-red-50 transition-colors disabled:opacity-50"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                    Usuń grupę
+                  </button>
+                )}
+              </div>
+              <button
+                onClick={handleSaveGroup}
+                disabled={savingGroup || !groupName.trim()}
+                className="flex items-center justify-center gap-3 px-6 py-4 bg-gradient-to-r from-emerald-500 to-teal-600 text-white rounded-xl hover:shadow-lg transition-shadow disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {savingGroup ? 'Zapisywanie…' : activeGroup ? 'Zapisz zmiany' : 'Utwórz grupę'}
+              </button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <AlertDialog open={waterConfirmDeviceId !== null} onOpenChange={(open) => !open && setWaterConfirmDeviceId(null)}>
+        <AlertDialogContent className="sm:max-w-md">
+          <AlertDialogHeader>
+            <AlertDialogTitle>Wymusić podlewanie?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Ta akcja wyśle komendę podlewania do urządzenia {waterConfirmDeviceId}. Komunikat potwierdzenia zostanie pokazany w aplikacji.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Anuluj</AlertDialogCancel>
+            <AlertDialogAction onClick={confirmForceWatering}>Wymuś podlewanie</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog open={deleteConfirmOpen} onOpenChange={setDeleteConfirmOpen}>
+        <AlertDialogContent className="sm:max-w-md">
+          <AlertDialogHeader>
+            <AlertDialogTitle>Usunąć grupę?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Grupa {activeGroup?.name} zostanie usunięta. Urządzenia nie zostaną skasowane, ale stracą przypisanie do tej grupy.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Anuluj</AlertDialogCancel>
+            <AlertDialogAction onClick={handleDeleteGroup}>Usuń grupę</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

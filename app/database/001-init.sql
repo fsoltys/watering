@@ -1,13 +1,20 @@
 CREATE EXTENSION IF NOT EXISTS timescaledb;
 
-CREATE TABLE users (
+CREATE TABLE IF NOT EXISTS users (
     id SERIAL PRIMARY KEY,
     email VARCHAR(255) UNIQUE NOT NULL,
     password_hash VARCHAR(255) NOT NULL,
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
-CREATE TABLE devices (
+CREATE TABLE IF NOT EXISTS user_settings (
+    user_id INT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    battery_threshold_percent INT DEFAULT 20,
+    water_level_threshold_percent INT DEFAULT 10,
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS devices (
     device_id VARCHAR(50) PRIMARY KEY,
     user_id INT REFERENCES users(id) ON DELETE CASCADE,
     name VARCHAR(100) NOT NULL,
@@ -16,7 +23,20 @@ CREATE TABLE devices (
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
-CREATE TABLE telemetry (
+CREATE TABLE IF NOT EXISTS device_groups (
+    id SERIAL PRIMARY KEY,
+    user_id INT REFERENCES users(id) ON DELETE CASCADE,
+    name VARCHAR(100) NOT NULL,
+    moisture_threshold_percent INT DEFAULT 30,
+    watering_duration_sec INT DEFAULT 10,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE (user_id, name)
+);
+
+ALTER TABLE devices
+    ADD COLUMN IF NOT EXISTS group_id INT REFERENCES device_groups(id) ON DELETE SET NULL;
+
+CREATE TABLE IF NOT EXISTS telemetry (
     time TIMESTAMPTZ NOT NULL,
     device_id VARCHAR(50) REFERENCES devices(device_id) ON DELETE CASCADE,
     water_lvl INT NOT NULL,

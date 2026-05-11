@@ -1,6 +1,7 @@
 import logging
+from typing import Annotated, List
+
 from fastapi import APIRouter, Depends, status, HTTPException
-from typing import List
 
 from schemas.device import (
     DeviceCreate, DeviceDetail, DeviceSettingsUpdate,
@@ -18,11 +19,16 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/devices", tags=["Devices"])
 
 
-@router.post("", response_model=DeviceDetail, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "",
+    response_model=DeviceDetail,
+    status_code=status.HTTP_201_CREATED,
+    responses={409: {"description": "Urządzenie o tym ID już istnieje."}},
+)
 async def add_device(
     body: DeviceCreate,
-    db: asyncpg.Connection = Depends(get_db_session),
-    current_user_id: int = Depends(get_current_user_id)
+    db: Annotated[asyncpg.Connection, Depends(get_db_session)],
+    current_user_id: Annotated[int, Depends(get_current_user_id)],
 ):
     logger.info(f"Próba dodania urządzenia '{body.device_id}' przez usera {current_user_id}")
     existing = await db.fetchval(
@@ -36,7 +42,7 @@ async def add_device(
         """
         INSERT INTO devices (device_id, user_id, name, water_duration_sec, moisture_threshold_percent)
         VALUES ($1, $2, $3, 10, 30)
-        RETURNING device_id, name, water_duration_sec, moisture_threshold_percent, created_at
+        RETURNING device_id, name, water_duration_sec, moisture_threshold_percent, created_at, NULL::INT AS group_id, NULL::TEXT AS group_name
         """,
         body.device_id, current_user_id, body.name
     )
@@ -44,16 +50,23 @@ async def add_device(
     return dict(row)
 
 
-@router.get("/{device_id}", response_model=DeviceDetail)
+@router.get(
+    "/{device_id}",
+    response_model=DeviceDetail,
+    responses={404: {"description": "Urządzenie nie istnieje."}},
+)
 async def get_device(
     device_id: str,
-    db: asyncpg.Connection = Depends(get_db_session),
-    current_user_id: int = Depends(get_current_user_id)
+    db: Annotated[asyncpg.Connection, Depends(get_db_session)],
+    current_user_id: Annotated[int, Depends(get_current_user_id)],
 ):
     row = await db.fetchrow(
         """
-        SELECT device_id, name, water_duration_sec, moisture_threshold_percent, created_at
-        FROM devices WHERE device_id = $1 AND user_id = $2
+        SELECT d.device_id, d.name, d.water_duration_sec, d.moisture_threshold_percent, d.created_at,
+               d.group_id, g.name AS group_name
+        FROM devices d
+        LEFT JOIN device_groups g ON g.id = d.group_id AND g.user_id = d.user_id
+        WHERE d.device_id = $1 AND d.user_id = $2
         """,
         device_id, current_user_id
     )
@@ -64,13 +77,17 @@ async def get_device(
     return dict(row)
 
 
-@router.put("/{device_id}/settings", response_model=DeviceDetail)
+@router.put(
+    "/{device_id}/settings",
+    response_model=DeviceDetail,
+    responses={404: {"description": "Urządzenie nie istnieje."}},
+)
 async def update_device_settings(
     device_id: str,
     body: DeviceSettingsUpdate,
-    db: asyncpg.Connection = Depends(get_db_session),
-    command_service: CommandService = Depends(get_command_service),
-    current_user_id: int = Depends(get_current_user_id)
+    db: Annotated[asyncpg.Connection, Depends(get_db_session)],
+    command_service: Annotated[CommandService, Depends(get_command_service)],
+    current_user_id: Annotated[int, Depends(get_current_user_id)],
 ):
     logger.info(f"Aktualizacja ustawień urządzenia '{device_id}' przez usera {current_user_id}: {body.model_dump(exclude_none=True)}")
     row = await db.fetchrow(
@@ -89,10 +106,10 @@ async def update_device_settings(
         """
         UPDATE devices
         SET name = $1, water_duration_sec = $2, moisture_threshold_percent = $3
-        WHERE device_id = $4
-        RETURNING device_id, name, water_duration_sec, moisture_threshold_percent, created_at
+        WHERE device_id = $4 AND user_id = $5
+        RETURNING device_id, name, water_duration_sec, moisture_threshold_percent, created_at, group_id
         """,
-        new_name, new_duration, new_threshold, device_id
+        new_name, new_duration, new_threshold, device_id, current_user_id
     )
     logger.info(f"Zaktualizowano ustawienia urządzenia '{device_id}' w bazie danych")
 
@@ -112,9 +129,9 @@ async def update_device_settings(
 @router.post("/{device_id}/water", status_code=status.HTTP_200_OK)
 async def trigger_water(
     device_id: str,
+    command_service: Annotated[CommandService, Depends(get_command_service)],
+    current_user_id: Annotated[int, Depends(get_current_user_id)],
     command: WaterCommandRequest | None = None,
-    command_service: CommandService = Depends(get_command_service),
-    current_user_id: int = Depends(get_current_user_id)
 ):
     duration_sec = command.duration_sec if command and command.duration_sec is not None else 10
     logger.info(f"Żądanie natychmiastowego podlewania: urządzenie '{device_id}', czas {duration_sec}s (user {current_user_id})")
@@ -128,8 +145,8 @@ async def trigger_water(
 async def trigger_watering_time(
     device_id: str,
     command: WateringTimeCommandRequest,
-    command_service: CommandService = Depends(get_command_service),
-    current_user_id: int = Depends(get_current_user_id)
+    command_service: Annotated[CommandService, Depends(get_command_service)],
+    current_user_id: Annotated[int, Depends(get_current_user_id)],
 ):
     logger.info(f"Żądanie ustawienia czasu podlewania: urządzenie '{device_id}', czas {command.duration_sec}s (user {current_user_id})")
     result = await command_service.send_watering_time_command(
@@ -142,8 +159,8 @@ async def trigger_watering_time(
 async def trigger_watering_threshold(
     device_id: str,
     command: WateringThresholdCommandRequest,
-    command_service: CommandService = Depends(get_command_service),
-    current_user_id: int = Depends(get_current_user_id)
+    command_service: Annotated[CommandService, Depends(get_command_service)],
+    current_user_id: Annotated[int, Depends(get_current_user_id)],
 ):
     logger.info(f"Żądanie ustawienia progu wilgotności: urządzenie '{device_id}', próg {command.threshold_percent}% (user {current_user_id})")
     result = await command_service.send_watering_threshold_command(
@@ -155,8 +172,8 @@ async def trigger_watering_threshold(
 @router.post("/{device_id}/reboot", status_code=status.HTTP_200_OK)
 async def trigger_reboot(
     device_id: str,
-    command_service: CommandService = Depends(get_command_service),
-    current_user_id: int = Depends(get_current_user_id)
+    command_service: Annotated[CommandService, Depends(get_command_service)],
+    current_user_id: Annotated[int, Depends(get_current_user_id)],
 ):
     logger.info(f"Żądanie restartu urządzenia '{device_id}' (user {current_user_id})")
     result = await command_service.send_reboot_command(

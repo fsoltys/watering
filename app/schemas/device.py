@@ -12,6 +12,8 @@ class DeviceDetail(BaseModel):
     water_duration_sec: int
     moisture_threshold_percent: int
     created_at: datetime
+    group_id: Optional[int] = None
+    group_name: Optional[str] = None
 
 class DeviceSettingsUpdate(BaseModel):
     name: Optional[str] = None

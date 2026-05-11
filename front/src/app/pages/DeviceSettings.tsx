@@ -3,6 +3,16 @@ import { ArrowLeft, Save, Droplet, Clock, RotateCw, Loader2 } from 'lucide-react
 import { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { Alert, AlertDescription } from '../components/ui/alert';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '../components/ui/alert-dialog';
 
 interface DeviceDetail {
   device_id: string;
@@ -23,8 +33,10 @@ export default function DeviceSettings() {
   const [loadingDevice, setLoadingDevice] = useState(true);
   const [saving, setSaving] = useState(false);
   const [rebooting, setRebooting] = useState(false);
+  const [rebootConfirmOpen, setRebootConfirmOpen] = useState(false);
   const [error, setError] = useState('');
   const [saved, setSaved] = useState(false);
+  const [commandMessage, setCommandMessage] = useState('');
 
   useEffect(() => {
     if (!deviceId) return;
@@ -77,15 +89,17 @@ export default function DeviceSettings() {
   };
 
   const handleRestart = async () => {
-    if (!confirm('Czy na pewno chcesz uruchomić urządzenie ponownie?')) return;
+    setRebootConfirmOpen(false);
     setRebooting(true);
+    setError('');
+    setCommandMessage('');
     try {
       const res = await fetch(`/api/v1/devices/${deviceId}/reboot`, {
         method: 'POST',
         headers: { Authorization: `Bearer ${token}` },
       });
       if (!res.ok) throw new Error('Błąd restartu');
-      alert('Komenda restartu wysłana!');
+      setCommandMessage('Komenda restartu wysłana!');
     } catch (e: any) {
       setError(e.message);
     } finally {
@@ -127,6 +141,12 @@ export default function DeviceSettings() {
             <AlertDescription>
               Ustawienia zapisane i komendy wysłane do urządzenia.
             </AlertDescription>
+          </Alert>
+        )}
+
+        {commandMessage && (
+          <Alert className="mb-6 border-emerald-200 bg-emerald-50 text-emerald-800">
+            <AlertDescription>{commandMessage}</AlertDescription>
           </Alert>
         )}
 
@@ -208,7 +228,7 @@ export default function DeviceSettings() {
 
             {/* Reboot Button */}
             <button
-              onClick={handleRestart}
+              onClick={() => setRebootConfirmOpen(true)}
               disabled={rebooting}
               className="w-full flex items-center justify-center gap-3 px-6 py-4 bg-white border border-orange-200 text-orange-600 rounded-xl hover:bg-orange-50 transition-colors disabled:opacity-50"
             >
@@ -220,6 +240,21 @@ export default function DeviceSettings() {
           </div>
         )}
       </div>
+
+        <AlertDialog open={rebootConfirmOpen} onOpenChange={setRebootConfirmOpen}>
+          <AlertDialogContent className="sm:max-w-md">
+            <AlertDialogHeader>
+              <AlertDialogTitle>Uruchomić urządzenie ponownie?</AlertDialogTitle>
+              <AlertDialogDescription>
+                Ta akcja wyśle komendę restartu do urządzenia {deviceId}. Nie używamy natywnego popupu, tylko spójny dialog aplikacji.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>Anuluj</AlertDialogCancel>
+              <AlertDialogAction onClick={handleRestart}>Uruchom ponownie</AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
     </div>
   );
 }
