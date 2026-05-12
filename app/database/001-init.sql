@@ -99,20 +99,20 @@ SELECT
 FROM telemetry
 GROUP BY bucket, device_id;
 
--- Widok 15-minutowy odświeża się co 15 minut
+-- Widok 15-minutowy: kompromis 5 min offset / 10 min schedule
 SELECT add_continuous_aggregate_policy('telemetry_15m',
     start_offset => INTERVAL '3 days',
-    end_offset => INTERVAL '15 minutes',
-    schedule_interval => INTERVAL '15 minutes');
+    end_offset => INTERVAL '5 minutes',
+    schedule_interval => INTERVAL '10 minutes');
 
--- Widok godzinny odświeża się co godzinę
+-- Widok godzinny: 20 min offset / 40 min schedule
 SELECT add_continuous_aggregate_policy('telemetry_1h',
     start_offset => INTERVAL '4 weeks',
-    end_offset => INTERVAL '1 hour',
-    schedule_interval => INTERVAL '1 hour');
+    end_offset => INTERVAL '20 minutes',
+    schedule_interval => INTERVAL '40 minutes');
 
--- Widok dzienny odświeża się co 24 godziny
+-- Widok dzienny: 8 h offset / 16 h schedule
 SELECT add_continuous_aggregate_policy('telemetry_1d',
     start_offset => INTERVAL '6 months',
-    end_offset => INTERVAL '1 day',
-    schedule_interval => INTERVAL '1 day');
+    end_offset => INTERVAL '8 hours',
+    schedule_interval => INTERVAL '16 hours');
