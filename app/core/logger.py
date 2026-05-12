@@ -2,12 +2,13 @@ import logging
 from core.config import settings
 
 class AccessLogToDebugFilter(logging.Filter):
-    """Zmienia poziom logów uvicorn.access z INFO na DEBUG"""
+    """Filtruje logi uvicorn.access - wyświetla je tylko gdy LOG_LEVEL=DEBUG
+    
+    Zwraca False (blokuje log) gdy poziom logowania to INFO lub wyżej.
+    Dzięki temu logi dostępu (HTTP requests) nie zaśmiecają konsoli.
+    """
     def filter(self, record):
-        if record.levelno == logging.INFO:
-            record.levelno = logging.DEBUG
-            record.levelname = "DEBUG"
-        return True
+        return settings.LOG_LEVEL.upper() == "DEBUG"
 
 def setup_logging():
     log_level = getattr(logging, settings.LOG_LEVEL.upper(), logging.INFO)
